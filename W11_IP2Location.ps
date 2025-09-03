@@ -1,0 +1,48 @@
+# Define IP prefixes for each category
+$onPremPrefixes = @("10.101.", "10.126.", "10.151.", "10.30.")
+$vpnPrefix = "10.19."
+$homePrefixes = @("192.168.", "172.16.", "10.1.")
+
+$customFieldName = "locationFromIp"
+
+# Get all physical IPv4 addresses, prioritizing Ethernet over Wi-Fi
+$ipAddresses = Get-NetIPAddress -AddressFamily IPv4 |
+    Where-Object {
+        $_.IPAddress -notlike "169.254.*" -and
+        $_.IPAddress -ne "127.0.0.1"
+    } |
+    ForEach-Object {
+        $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue
+        if ($adapter -and $adapter.Status -eq "Up" -and $adapter.HardwareInterface) {
+            [PSCustomObject]@{
+                IPAddress = $_.IPAddress
+                InterfaceAlias = $adapter.InterfaceAlias
+            }
+        }
+    } |
+    Sort-Object {
+        if ($_.InterfaceAlias -match "Ethernet") { 0 }
+        elseif ($_.InterfaceAlias -match "Wi[- ]?Fi") { 1 }
+        else { 2 }
+    } |
+    Select-Object -ExpandProperty IPAddress
+
+# Default location
+$location = "Unknown"
+
+# Classify based on IP prefix
+foreach ($ip in $ipAddresses) {
+    if ($onPremPrefixes | Where-Object { $ip.StartsWith($_) }) {
+        $location = "OnPrem"
+        break
+    } elseif ($ip.StartsWith($vpnPrefix)) {
+        $location = "VPN"
+        break
+    } elseif ($homePrefixes | Where-Object { $ip.StartsWith($_) }) {
+        $location = "Home"
+        break
+    }
+}
+
+# Output for NinjaOne
+Ninja-Property-Set $customFieldName $location
